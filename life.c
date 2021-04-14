@@ -165,26 +165,31 @@ unsigned life_compute_tiled (unsigned nb_iter)
 unsigned life_compute_omp (unsigned nb_iter)
 {
   unsigned res = 0;
-  int* tmp = malloc(sizeof(int)*sizeof(int)*DIM);
+  int *tmp = (int *)malloc( DIM * 3 * sizeof(int));
 
   for (unsigned it = 1; it <= nb_iter; it++) {
     unsigned change = 0;
     
   
-  #pragma omp parallel for schedule(dynamic)
+  #pragma omp parallel for schedule(static)
     for (int y = 0; y < DIM; y += TILE_H) {
       for (int x = 0; x < DIM; x += TILE_W) {
-        //change |= do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
-       //tmp[0][0] = do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
+        
+       //Récupération de do tile
+        *((tmp + y/TILE_H) + (0+x/TILE_W)) = do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
+       //Récupération du x
+        *((tmp + y/TILE_H) + (1+x/TILE_W)) = x;
+       //Récupération du y
+        *((tmp + y/TILE_H) + (2+x/TILE_W)) = y; 
        
-       tmp[x/TILE_W] = do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
-       //printf("x/TILE_W : %d\n", tmp[x/TILE_W]);
-       /* tmp[x/TILE_W][1] = y;
-        tmp[x/TILE_W][2] = x;*/
-        //change |= tmp[j][0];
+        printf("%d,%d,%d; ",*((tmp + y/TILE_H) + (0+x/TILE_W)),*((tmp + y/TILE_H) + (1+x/TILE_W)),*((tmp + y/TILE_H) + (2+x/TILE_W)));
+        #pragma omp critical 
+        {
         change |= do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
+        }
+
       }
-      
+      printf("\n");
     } 
     swap_tables ();
     //printf("change : %d\n", change);
