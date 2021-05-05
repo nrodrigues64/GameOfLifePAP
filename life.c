@@ -6,12 +6,15 @@
 #include <stdbool.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <stdint.h>
 #include <unistd.h>
 
 static unsigned color = 0xFFFF00FF; // Living cells have the yellow color
 
 typedef unsigned cell_t;
 
+int iter = 1;
+int *tmp;
 static cell_t *restrict _table = NULL, *restrict _alternate_table = NULL;
 
 static inline cell_t *table_cell (cell_t *restrict i, int y, int x)
@@ -66,7 +69,6 @@ static inline void swap_tables (void)
 }
 
 ///////////////////////////// Sequential version (seq)
-
 static int compute_new_state (int y, int x)
 {
   unsigned n      = 0;
@@ -88,6 +90,7 @@ static int compute_new_state (int y, int x)
 
   return change;
 }
+
 
 unsigned life_compute_seq (unsigned nb_iter)
 {
@@ -161,36 +164,26 @@ unsigned life_compute_tiled (unsigned nb_iter)
   return res;
 }
 
+
+
+
 ///////////////////////////// Tiled omp version (tiled)
 unsigned life_compute_omp (unsigned nb_iter)
 {
+  
   unsigned res = 0;
-  int *tmp = (int *)malloc( DIM * 3 * sizeof(int));
-
+  
   for (unsigned it = 1; it <= nb_iter; it++) {
     unsigned change = 0;
-    
-  
   #pragma omp parallel for schedule(static)
-    for (int y = 0; y < DIM; y += TILE_H) {
-      for (int x = 0; x < DIM; x += TILE_W) {
-        
-       //Récupération de do tile
-        *((tmp + y/TILE_H) + (0+x/TILE_W)) = do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
-       //Récupération du x
-        *((tmp + y/TILE_H) + (1+x/TILE_W)) = x;
-       //Récupération du y
-        *((tmp + y/TILE_H) + (2+x/TILE_W)) = y; 
-       
-        printf("%d,%d,%d; ",*((tmp + y/TILE_H) + (0+x/TILE_W)),*((tmp + y/TILE_H) + (1+x/TILE_W)),*((tmp + y/TILE_H) + (2+x/TILE_W)));
+    for (int y = 0; y < DIM; y += TILE_H) 
+      for (int x = 0; x < DIM; x += TILE_W)
         #pragma omp critical 
         {
         change |= do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
         }
-
-      }
-      printf("\n");
-    } 
+      
+    
     swap_tables ();
     //printf("change : %d\n", change);
     if (!change) { // we stop when all cells are stable
@@ -201,7 +194,6 @@ unsigned life_compute_omp (unsigned nb_iter)
 
   return res;
 }
-
 ///////////////////////////// Initial configs
 
 void life_draw_guns (void);
@@ -357,3 +349,267 @@ void life_draw_diehard (void)
   life_rle_parse ("data/rle/diehard.rle", DIM / 2, DIM / 2,
                   RLE_ORIENTATION_NORMAL);
 }
+#include <immintrin.h>
+#if defined(ENABLE_VECTO) && (AVX2 == 1)
+
+
+void display_vec (__m256i v)
+{
+  char tmp [32];
+
+  _mm256_store_si256 ((__m256i *)tmp, v);
+
+  for (int i = 0; i < 32; i++){
+    printf ("%u ", tmp [i]);
+    if(i%32==31)
+      printf("\n");
+  }
+}
+
+
+/*static int compute_new_state (int y, int x)
+{
+  unsigned n      = 0;
+  unsigned me     = cur_table (y, x) != 0;
+  unsigned change = 0;
+
+  if (x > 0 && x < DIM - 1 && y > 0 && y < DIM - 1) {
+
+    for (int i = y - 1; i <= y + 1; i++)
+      for (int j = x - 1; j <= x + 1; j++)
+        n += cur_table (i, j);
+
+    n = (n == 3 + me) | (n == 3);
+    if (n != me)
+      change |= 1;
+
+    next_table (y, x) = n;
+  }
+
+  return change;
+}*/
+
+//./run -k life -v vec -s 32 -a stable -i 1 -n
+static int compute_new_state_vec (int y, int x,int height, int width)
+{
+  const __m256i zero = _mm256_set1_epi8(0);
+  __m256i change = _mm256_set1_epi8(0);
+  char x_c[32] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31};
+  
+  const __m256i dim = _mm256_set1_epi8(DIM);
+
+  for (int i = y; i < y + height; i++)
+    for (int j = x; j < x + width; j+=32) {
+      //Pour les x
+      
+      __m256i tmp_x = _mm256_set1_epi8( x );
+      __m256i x_vec = _mm256_load_si256((__m256i *)x_c);
+      x_vec = _mm256_add_epi8(tmp_x,x_vec); 
+      
+      
+      __m256i y_vec = _mm256_set1_epi8( i );
+      
+      
+      
+
+      __m256i mask_x_more_than_zero = _mm256_cmpgt_epi8(x_vec,zero);
+      __m256i mask_x_less_than_DIM = _mm256_cmpgt_epi8(dim,x_vec);
+      
+
+      __m256i mask_y_more_than_zero = _mm256_cmpgt_epi8(y_vec,zero);
+      __m256i mask_y_less_than_DIM = _mm256_cmpgt_epi8(dim,y_vec);
+      
+      
+
+
+      __m256i x_y = _mm256_loadu_si256((__m256i *)&cur_table(y,x)); 
+      __m256i mask_me = _mm256_cmpeq_epi8(x_y,zero);
+      __m256i me_if = _mm256_set1_epi8(0);
+      __m256i me_else = _mm256_set1_epi8(1);
+      __m256i me = _mm256_blendv_epi8(me_else,me_if,mask_me);
+
+      __m256i x_y_right = _mm256_set1_epi8(0);
+      //x_y_right = _mm256_blendv_epi8(zero,(__m256i *)&cur_table(y,x+1));
+    
+
+      __m256i x_y_left = _mm256_set1_epi8(0);
+      x_y_left = _mm256_blendv_epi8(zero,_mm256_loadu_si256((__m256i *)&cur_table(y,x-1)),mask_x_more_than_zero);
+      printf("x_y_left :");
+      display_vec(zero);
+      display_vec(_mm256_loadu_si256((__m256i *)&cur_table(y,x)));
+      display_vec(x_y_left);
+
+      /*__m256i mask_x_y_up = _mm256_cmpgt_epi8(_mm256_load_si256(&y_vec),_mm256_set1_epi8(0));
+      
+      __m256i x_y_up = _mm256_blendv_epi8(_mm256_set1_epi8(0),_mm256_loadu_si256((__m256i *)&cur_table(y-1,x)),mask_x_y_up);*/
+      __m256i x_y_up = _mm256_set1_epi8(0);
+      if(y == 0) {
+        x_y_up = _mm256_set1_epi8(0);
+      } else {
+        x_y_up = _mm256_loadu_si256((__m256i *)&cur_table(y-1,x));
+      }
+
+      __m256i x_y_down = _mm256_set1_epi8(0);
+      if(y == DIM-1) {
+        x_y_down = _mm256_set1_epi8(0);
+      } else {
+        x_y_down = _mm256_loadu_si256((__m256i *)&cur_table(y+1,x));
+      }
+      
+      __m256i x_y_up_right = _mm256_set1_epi8(0);
+      if(y == 0 || x+32 == DIM-1) {
+        x_y_up_right = _mm256_set1_epi8(0);
+      } else {
+        x_y_up_right = _mm256_loadu_si256((__m256i *)&cur_table(y-1,x+1));
+      }
+
+      __m256i x_y_up_left = _mm256_set1_epi8(0);
+      if(y == 0 || x == 0) {
+        x_y_up_left = _mm256_set1_epi8(0);
+      } else {
+        x_y_up_left = _mm256_loadu_si256((__m256i *)&cur_table(y-1,x-1));
+      }
+
+      __m256i x_y_down_right =  _mm256_set1_epi8(0);
+      if(y == DIM-1 || x+32 == DIM-1) {
+        x_y_down_right =  _mm256_set1_epi8(0);
+      } else {
+        x_y_down_right = _mm256_loadu_si256((__m256i *)&cur_table(y+1,x+1));
+      }
+      
+      __m256i x_y_down_left = _mm256_set1_epi8(0);
+      if(y == DIM-1 || x == 0) {
+        x_y_down_left = _mm256_set1_epi8(0);
+      } else {
+        x_y_down_left = _mm256_loadu_si256((__m256i *)&cur_table(y+1,x-1));
+      }
+      
+      __m256i n = _mm256_add_epi8(x_y,x_y_right);
+      
+      n = _mm256_add_epi8(n, x_y_left);
+      
+      n = _mm256_add_epi8(n, x_y_up);
+      
+      n = _mm256_add_epi8(n, x_y_down);
+      
+      n = _mm256_add_epi8(n, x_y_up_right);
+      n = _mm256_add_epi8(n, x_y_up_left);
+      n = _mm256_add_epi8(n, x_y_down_right);
+      n = _mm256_add_epi8(n, x_y_down_left);
+      
+      __m256i me_3 = _mm256_add_epi8(me,_mm256_set1_epi8(3));
+      __m256i mask_me_3 = _mm256_cmpeq_epi8(n, me_3); 
+      __m256i mask_3 = _mm256_cmpeq_epi8(n, _mm256_set1_epi8(3));
+      __m256i mask_n = _mm256_add_epi8(mask_me_3,mask_3);
+      __m256i n_if = _mm256_set1_epi8(1);
+      __m256i n_else = _mm256_set1_epi8(0);
+      n = _mm256_blendv_epi8(n_else,n_if,mask_n);
+      
+      __m256i mask_me_n = _mm256_cmpeq_epi8(n,me);
+      change = _mm256_set1_epi8(0);
+      __m256i change_else = _mm256_set1_epi8(1);
+      change = _mm256_blendv_epi8(change_else,change,mask_me_n); 
+
+    }
+  
+  return !_mm256_testz_si256(change,_mm256_set1_epi8(1));
+  
+  //
+  
+  
+  //int * a = (int*) &change;
+  //return 0;
+  
+  
+}
+
+static int do_tile_vec (int x, int y, int width, int height)
+{
+  
+  __m256i change = _mm256_set1_epi8(0);
+  __m256i one = _mm256_set1_epi8(1); 
+  for (int i = y; i < y + height; i++)
+    for (int j = x; j < x + width; j++) {
+      __m256i tmp = _mm256_set1_epi8(compute_new_state (i, j));
+      __m256i mask_change = _mm256_cmpeq_epi8(tmp,one);
+      change = _mm256_blendv_epi8(change,tmp,mask_change);
+    }
+  int * a = (int*)&change;
+  return a[0];
+}
+
+//////////////////////////// Lazy vect version (tiled)
+// Tile inner computation
+
+static int do_tile_rec (int x, int y, int width, int height)
+{
+  int change = 0;
+  
+  for (int i = y; i < y + height; i++)
+    for (int j = x; j < x + width; j++)
+      change |= compute_new_state (i, j);
+
+  return change;
+}
+
+static int do_tile_v (int x, int y, int width, int height, int who)
+{
+  int r;
+
+  monitoring_start_tile (who);
+
+  r = compute_new_state_vec (x, y, width, height);
+
+  monitoring_end_tile (x, y, width, height, who);
+  
+  return r;
+  
+}
+
+unsigned life_compute_lazy_vec (unsigned nb_iter)
+{
+  compute_new_state_vec(0,0,32,32);
+  unsigned res = 0;
+  //compute_new_state_vec(0,0);
+  for (unsigned it = 1; it <= nb_iter; it++) {
+    unsigned change = 0;
+
+    for (int y = 0; y < DIM; y += TILE_H)
+      for (int x = 0; x < DIM; x += TILE_W) {
+        change |= do_tile (x, y, TILE_W, TILE_H, 0);
+        
+      }
+        
+    swap_tables ();
+
+    if (!change) { // we stop when all cells are stable
+      res = it;
+      break;
+    }
+  }
+  return res;
+}
+
+unsigned life_compute_lazy_vec_omp (unsigned nb_iter)
+{
+  unsigned res = 0;
+
+  for (unsigned it = 1; it <= nb_iter; it++) {
+    unsigned change = 0;
+  #pragma omp parallel for collapse(2) schedule(dynamic)
+    for (int y = 0; y < DIM; y += TILE_H)
+      for (int x = 0; x < DIM; x += TILE_W) {
+        change |= do_tile_v (x, y, TILE_W, TILE_H, omp_get_thread_num());
+      }
+        
+    swap_tables ();
+
+    if (!change) { // we stop when all cells are stable
+      res = it;
+      break;
+    }
+  }
+  return res;
+}
+
+#endif
