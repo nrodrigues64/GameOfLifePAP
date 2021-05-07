@@ -45,7 +45,7 @@ void life_test_init (void)
 
 void life_test_finalize (void)
 {
-  const unsigned size = DIM + 2 * DIM + 2  * sizeof (cell_t);
+  const unsigned size = (DIM + 2) * (DIM + 2)  * sizeof (cell_t);
 
   munmap (_table, size);
   munmap (_alternate_table, size);
@@ -56,11 +56,12 @@ void life_test_refresh_img (void)
 {
   for (int i = 0; i < DIM; i++)
     for (int j = 0; j < DIM; j++)
-      cur_img (i, j) = cur_table (i, j) * color;
+      cur_img (i+1, j+1) = cur_table (i+1, j+1) * color;
 }
 
 static inline void swap_tables (void)
 {
+  printf("f");
   cell_t *tmp = _table;
 
   _table           = _alternate_table;
@@ -148,9 +149,9 @@ unsigned life_test_compute_tiled (unsigned nb_iter)
   for (unsigned it = 1; it <= nb_iter; it++) {
     unsigned change = 0;
 
-    for (int y = 1; y < DIM+1; y += TILE_H)
-      for (int x = 1; x < DIM+1; x += TILE_W)
-        change |= do_tile (x, y, TILE_W, TILE_H, omp_get_thread_num());
+    for (int y = 0; y < DIM; y += TILE_H)
+      for (int x = 0; x < DIM; x += TILE_W)
+        change |= do_tile (x+1, y+1, TILE_W, TILE_H, omp_get_thread_num());
 
     swap_tables ();
 
@@ -356,95 +357,99 @@ void display_vec (__m256i v);
 
 
 
+
 /*static int compute_new_state (int y, int x)
 {
   unsigned n      = 0;
   unsigned me     = cur_table (y, x) != 0;
   unsigned change = 0;
-
   if (x > 0 && x < DIM - 1 && y > 0 && y < DIM - 1) {
-
     for (int i = y - 1; i <= y + 1; i++)
       for (int j = x - 1; j <= x + 1; j++)
         n += cur_table (i, j);
-
     n = (n == 3 + me) | (n == 3);
     if (n != me)
       change |= 1;
-
     next_table (y, x) = n;
   }
-
   return change;
 }*/
 
 //./run -k life -v vec -s 32 -a stable -i 1 -n
-static int compute_new_state_vec (int y, int x,int height, int width)
+static int compute_new_state_vec_test (int y, int x)
 {
-  const __m256i zero = _mm256_set1_epi8(0);
-  __m256i change = _mm256_set1_epi8(0);
-  for (int i = y; i < y + height; i++)
-    for (int j = x; j < x + width; j+=32) {
-      
+  char *x_y_c = &cur_table(y,x);
+  char *x_y_right_c = &cur_table(y,x+1);
+  char *x_y_left_c = &cur_table(y,x-1);
 
-      __m256i x_y = _mm256_loadu_si256((__m256i *)&cur_table(y,x)); 
-       
-      __m256i mask_me = _mm256_cmpeq_epi8(x_y,zero);
-      __m256i me_if = _mm256_set1_epi8(0);
-      __m256i me_else = _mm256_set1_epi8(1);
-      __m256i me = _mm256_blendv_epi8(me_else,me_if,mask_me);
-     
-      __m256i x_y_right = _mm256_loadu_si256((__m256i *)&cur_table(y,x+1));
-      __m256i x_y_left = _mm256_loadu_si256((__m256i *)&cur_table(y,x-1));
-      __m256i x_y_up = _mm256_loadu_si256((__m256i *)&cur_table(y-1,x));
-      __m256i x_y_down = _mm256_loadu_si256((__m256i *)&cur_table(y+1,x));
-      __m256i x_y_up_right = _mm256_loadu_si256((__m256i *)&cur_table(y-1,x+1));
-      __m256i x_y_up_left = _mm256_loadu_si256((__m256i *)&cur_table(y-1,x-1));
-      __m256i x_y_down_right =  _mm256_loadu_si256((__m256i *)&cur_table(y+1,x+1));
-      __m256i x_y_down_left = _mm256_loadu_si256((__m256i *)&cur_table(y+1,x-1));
-      
-      
-      __m256i n = _mm256_add_epi8(x_y,x_y_right); 
-      n = _mm256_add_epi8(n, x_y_left);
-      n = _mm256_add_epi8(n, x_y_up);
-      n = _mm256_add_epi8(n, x_y_down);
-      n = _mm256_add_epi8(n, x_y_up_right);
-      n = _mm256_add_epi8(n, x_y_up_left);
-      n = _mm256_add_epi8(n, x_y_down_right);
-      n = _mm256_add_epi8(n, x_y_down_left);
-      
-      __m256i me_3 = _mm256_add_epi8(me,_mm256_set1_epi8(3));
-      __m256i mask_me_3 = _mm256_cmpeq_epi8(n, me_3); 
-      __m256i mask_3 = _mm256_cmpeq_epi8(n, _mm256_set1_epi8(3));
-      __m256i mask_n = _mm256_or_si256(mask_me_3,mask_3);
-      __m256i n_if = _mm256_set1_epi8(1);
-      __m256i n_else = _mm256_set1_epi8(0);
-      n = _mm256_blendv_epi8(n_else,n_if,mask_n);
-      
-      __m256i mask_me_n = _mm256_cmpeq_epi8(n,me);
-      __m256i change_else = _mm256_set1_epi8(1);
-      change = _mm256_blendv_epi8(change_else,change,mask_me_n); 
-
-    }
-  return _mm256_testz_si256(change,_mm256_set1_epi8(0));
+  char *x_y_up_c = &cur_table(y-1,x);
+  char *x_y_down_c = &cur_table(y+1,x);
   
+  char *x_y_up_right_c = &cur_table(y-1,x+1);
+  char *x_y_up_left_c = &cur_table(y-1,x-1);
+  
+  char *x_y_down_right_c =  &cur_table(y+1,x+1);
+  char *x_y_down_left_c = &cur_table(y+1,x-1);
+ 
+  __m256i x_y = _mm256_load_si256( (void *) &x_y_c); 
+  
+  __m256i x_y_right = _mm256_load_si256( (void *) &x_y_right_c);
+  __m256i x_y_left = _mm256_load_si256( (void *) &x_y_left_c);
+  
+  __m256i x_y_up = _mm256_load_si256( (void *) &x_y_up_c);
+  __m256i x_y_down = _mm256_load_si256((void *) &x_y_down_c);
+  
+  __m256i x_y_up_right = _mm256_load_si256((void *) &x_y_up_right_c);
+  __m256i x_y_up_left = _mm256_load_si256((void *) &x_y_up_left_c);
+  
+  __m256i x_y_down_right =  _mm256_load_si256((void *) &x_y_down_right_c);
+  __m256i x_y_down_left = _mm256_load_si256((void *) &x_y_down_left_c);
+  
+
+  __m256i n = _mm256_load_si256(&x_y);
+  
+  n = _mm256_adds_epi8(n, x_y_right); 
+  n = _mm256_adds_epi8(n, x_y_left);
+  n = _mm256_adds_epi8(n, x_y_up);
+  n = _mm256_adds_epi8(n, x_y_down);
+  n = _mm256_adds_epi8(n, x_y_up_right);
+  n = _mm256_adds_epi8(n, x_y_up_left);
+  n = _mm256_adds_epi8(n, x_y_down_right);
+  n = _mm256_adds_epi8(n, x_y_down_left);
+  
+  __m256i three = _mm256_set1_epi8(3);
+   
+  __m256i state = _mm256_or_si256(
+    _mm256_abs_epi8(
+      _mm256_cmpeq_epi8(
+        n, _mm256_adds_epi8(three, x_y)
+      )
+    ),
+    _mm256_abs_epi8(
+      _mm256_cmpeq_epi8(n,three)
+    )
+  );
+  //display_vec(state);
+  _mm256_storeu_si256 ((__m256i *)&next_table(y, x),state);
+  
+  //display_vec(x_y);
+  //display_vec(state);
+  //display_vec(change);
+  //printf("%d\n",_mm256_testz_si256(change,change));
+  return !_mm256_testz_si256(x_y,state);
+
 }
 
 static int do_tile_vec (int x, int y, int width, int height)
 {
+  int change = 0;
   
-  __m256i change = _mm256_set1_epi8(0);
-  __m256i one = _mm256_set1_epi8(1); 
   for (int i = y; i < y + height; i++)
-    for (int j = x; j < x + width; j++) {
-      __m256i tmp = _mm256_set1_epi8(compute_new_state (i, j));
-      __m256i mask_change = _mm256_cmpeq_epi8(tmp,one);
-      change = _mm256_blendv_epi8(change,tmp,mask_change);
-    }
-  int * a = (int*)&change;
-  return a[0];
-}
+    for (int j = x; j < x + width; j+=32)
+      change |= compute_new_state_vec_test (i, j);
 
+  return change;
+}
 //////////////////////////// Lazy vect version (tiled)
 // Tile inner computation
 
@@ -465,7 +470,7 @@ static int do_tile_v (int x, int y, int width, int height, int who)
 
   monitoring_start_tile (who);
 
-  r = compute_new_state_vec (x, y, width, height);
+  r = do_tile_vec (x, y,width,height);
 
   monitoring_end_tile (x, y, width, height, who);
   
@@ -477,7 +482,6 @@ unsigned life_test_compute_lazy_vec (unsigned nb_iter)
 {
   
   unsigned res = 0;
-  //compute_new_state_vec(0,0);
   for (unsigned it = 1; it <= nb_iter; it++) {
     unsigned change = 0;
 
