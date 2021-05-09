@@ -306,7 +306,7 @@ int tile_up_left_omp (int x, int y, int w, int h, int cpu)
   int change = 0;
 
   monitoring_start_tile (cpu);
-  #pragma omp parallel for collapse(2) schedule(dynamic,1)
+  #pragma omp parallel for collapse(2) schedule(dynamic)
   for (int i = y + h - 1; i >= y; i--)
     for (int j = x + w - 1; j >= x; j--)
       if (cur_img (i, j)) {
@@ -359,19 +359,19 @@ unsigned max_compute_task (unsigned nb_iter)
 
   for (unsigned it = 1; it <= nb_iter; it++) {
     int change = 0;
-    #pragma omp parallel master shared(change)
+    #pragma omp parallel master
     {
     
     // Bottom-right propagation
     for (int i = 0; i < NB_TILES_Y; i++)
       for (int j = 0; j < NB_TILES_X; j++)
-    #pragma omp task shared(change,TILE_H,TILE_W) firstprivate(j,i) depend(out:tuile[i][j-1],tuile[i-1][j],tuile[i][j+1],tuile[i+1][j])
+    #pragma omp task firstprivate(j,i) depend(in:tuile[i][j-1],tuile[i-1][j]) depend(out:tuile[i][j]) //depend(inout:tuile[i][j+1],tuile[i+1][j])
         change |= tile_down_right (j * TILE_W, i * TILE_H, TILE_W, TILE_H, omp_get_thread_num());
     
     // Up-left propagation
     for (int i = NB_TILES_Y - 1; i >= 0; i--)
       for (int j = NB_TILES_X - 1; j >= 0; j--)
-    #pragma omp task depend(out:tuile[i][j-1],tuile[i-1][j],tuile[i][j+1],tuile[i+1][j])
+    #pragma omp task firstprivate(j,i) depend(in:tuile[i][j+1],tuile[i+1][j]) depend(out:tuile[i][j])
         change |= tile_up_left (j * TILE_W, i * TILE_H, TILE_W, TILE_H, omp_get_thread_num());
     
     
@@ -386,76 +386,36 @@ unsigned max_compute_task (unsigned nb_iter)
   return res;
 }
 
-// We propagate the max color down-right. This is the expensive implementation
-// which constantly checks border conditions...
-int tile_down_right_task (int x, int y, int w, int h, int cpu)
+unsigned max_compute_ordered (unsigned nb_iter)
 {
-  int change = 0;
+  int tuile[NB_TILES_Y][NB_TILES_X + 1] __attribute__ ((unused));
+  unsigned res = 0;
 
-  monitoring_start_tile (cpu);
-
-  for (int i = y; i < y + h; i++)
-    for (int j = x; j < x + w; j++)
-      if (cur_img (i, j)) {
-        if (i > 0 && j > 0) {
-          uint32_t m = max (cur_img (i - 1, j), cur_img (i, j - 1));
-          if (m > cur_img (i, j)) {
-            change     = 1;
-            cur_img (i, j) = m;
-          }
-        } else if (j > 0) {
-          uint32_t m = cur_img (i, j - 1);
-          if (m > cur_img (i, j)) {
-            change     = 1;
-            cur_img (i, j) = m;
-          }
-        } else if (i > 0) {
-          uint32_t m = cur_img (i - 1, j);
-          if (m > cur_img (i, j)) {
-            change     = 1;
-            cur_img (i, j) = m;
-          }
-        }
+  for (unsigned it = 1; it <= nb_iter; it++) {
+    int change = 0;
+    
+    #pragma omp for ordered(2) schedule(dynamic, 1) collapse(2) 
+    for (int i = 0; i < NB_TILES_Y; i++)
+      for (int j = 0; j < NB_TILES_X; j++) {
+    #pragma omp ordered depend(sink : i - 1, j) depend(sink : i, j - 1)
+        change |= tile_down_right (j * TILE_W, i * TILE_H, TILE_W, TILE_H, omp_get_thread_num());
+    #pragma omp ordered depend(source)
       }
-
-  monitoring_end_tile_id (x, y, w, h, cpu, TASKID_DOWN_RIGHT);
-
-  return change;
-}
-
-// We propagate the max color up-left. This is the expensive implementation
-// which constantly checks border conditions...
-int tile_up_left_task (int x, int y, int w, int h, int cpu)
-{
-  int change = 0;
-
-  monitoring_start_tile (cpu);
-
-  for (int i = y + h - 1; i >= y; i--)
-    for (int j = x + w - 1; j >= x; j--)
-      if (cur_img (i, j)) {
-        if (i < DIM - 1 && j < DIM - 1) {
-          uint32_t m = max (cur_img (i + 1, j), cur_img (i, j + 1));
-          if (m > cur_img (i, j)) {
-            change     = 1;
-            cur_img (i, j) = m;
-          }
-        } else if (j < DIM - 1) {
-          uint32_t m = cur_img (i, j + 1);
-          if (m > cur_img (i, j)) {
-            change     = 1;
-            cur_img (i, j) = m;
-          }
-        } else if (i < DIM - 1) {
-          uint32_t m = cur_img (i + 1, j);
-          if (m > cur_img (i, j)) {
-            change     = 1;
-            cur_img (i, j) = m;
-          }
-        }
+    // Up-left propagation
+    #pragma omp for ordered(2) schedule(dynamic, 1) collapse(2)
+    for (int i = NB_TILES_Y - 1; i >= 0; i--)
+      for (int j = NB_TILES_X - 1; j >= 0; j--) {
+    #pragma omp ordered depend(sink : i + 1, j) depend(sink : i, j + 1)
+        change |= tile_up_left (j * TILE_W, i * TILE_H, TILE_W, TILE_H, omp_get_thread_num());
+    #pragma omp ordered depend(source)
       }
+    
+    if (!change) {
+      res = it;
+      break;
+    }
+    
+  }
 
-  monitoring_end_tile_id (x, y, w, h, cpu, TASKID_UP_LEFT);
-
-  return change;
+  return res;
 }
