@@ -306,7 +306,7 @@ int tile_up_left_omp (int x, int y, int w, int h, int cpu)
   int change = 0;
 
   monitoring_start_tile (cpu);
-  #pragma omp parallel for collapse(2) schedule(dynamic)
+  #pragma omp parallel for
   for (int i = y + h - 1; i >= y; i--)
     for (int j = x + w - 1; j >= x; j--)
       if (cur_img (i, j)) {
